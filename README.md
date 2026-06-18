@@ -10,15 +10,47 @@
 
 ## Usage
 
-This crate currently exposes a single entrypoint:
+This crate exposes two entrypoints:
 
-- `criterion_markdown::render(criterion_dir, allowlist)`
+- `criterion_markdown::render(criterion_dir, allowlist)` — render with default options.
+- `criterion_markdown::render_with_options(criterion_dir, allowlist, &options)` — render with custom [`RenderOptions`].
 
 Where:
 
 - `criterion_dir` points to a Criterion output directory (for example, `target/criterion`).
 - `allowlist` is an iterable of benchmark ids (`Vec<String>`, `&[String]`, `Vec<&str>`, etc.).
-- If `allowlist` is empty, no filtering is applied.
+  If empty, no filtering is applied.
+
+### Options
+
+`RenderOptions` has the following fields:
+
+- `collapsible: Option<String>` — if set, wraps the output in a `<details><summary>…</summary></details>` tag using the provided value as the summary text. The summary tag also includes the best/worst change range.
+
+### Example
+
+```rust
+use criterion_markdown::RenderOptions;
+
+fn main() -> anyhow::Result<()> {
+    // Basic usage
+    let markdown = criterion_markdown::render("target/criterion", std::iter::empty::<&str>())?;
+    println!("{markdown}");
+
+    // Collapsible output
+    let options = RenderOptions {
+        collapsible: Some("Benchmark Results".into()),
+    };
+    let markdown = criterion_markdown::render_with_options(
+        "target/criterion",
+        std::iter::empty::<&str>(),
+        &options,
+    )?;
+    println!("{markdown}");
+
+    Ok(())
+}
+```
 
 ## How This Differs From criterion-table
 

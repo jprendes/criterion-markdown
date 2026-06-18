@@ -4,7 +4,11 @@ use std::fmt::Write;
 use crate::model::{BenchEntry, ChangeInfo};
 
 /// Formats all benchmark entries into a markdown string.
-pub(crate) fn format_table(entries: &[BenchEntry]) -> String {
+///
+/// When `skip_headers` is true, the top-level `# Benchmarks` and
+/// `## Benchmark Results` headings are omitted (useful when the output
+/// is wrapped in a `<details><summary>` tag).
+pub(crate) fn format_table(entries: &[BenchEntry], skip_headers: bool) -> String {
     // Group entries by group_id, preserving discovery order
     let mut groups: BTreeMap<&str, Vec<&BenchEntry>> = BTreeMap::new();
     for entry in entries {
@@ -12,14 +16,18 @@ pub(crate) fn format_table(entries: &[BenchEntry]) -> String {
     }
 
     let mut out = String::new();
-    writeln!(out, "# Benchmarks\n").unwrap();
-    writeln!(out, "## Benchmark Results\n").unwrap();
+    if !skip_headers {
+        writeln!(out, "# Benchmarks\n").unwrap();
+        writeln!(out, "## Benchmark Results\n").unwrap();
+    }
 
     for (group_id, group_entries) in &groups {
         writeln!(out, "### {group_id}\n").unwrap();
         write_group_table(&mut out, group_entries);
         writeln!(out).unwrap();
     }
+
+    write_summary(&mut out, entries);
 
     out
 }
@@ -132,4 +140,102 @@ fn format_time(ns: f64) -> String {
     } else {
         format!("{:.2} s", ns / 1_000_000_000.0)
     }
+}
+
+/// Returns true if the change ratio is valid (finite and positive).
+fn is_valid_change(change: &ChangeInfo) -> bool {
+    let ratio = 1.0 + change.point_estimate;
+    ratio.is_finite() && ratio > 0.0
+}
+
+/// Summary information for the best and worst benchmarks.
+pub(crate) struct SummaryInfo {
+    pub(crate) best_id: String,
+    pub(crate) best_change: String,
+    /// True if the best entry is actually a gain (faster), false if it's just the least regression.
+    pub(crate) best_is_gain: bool,
+    pub(crate) worst_id: String,
+    pub(crate) worst_change: String,
+    /// True if the worst entry is actually a regression (slower), false if it's just the least gain.
+    pub(crate) worst_is_regression: bool,
+}
+
+/// Computes the biggest gain and worst regression across all entries.
+pub(crate) fn compute_summary(entries: &[BenchEntry]) -> Option<SummaryInfo> {
+    let with_valid_change: Vec<&BenchEntry> = entries
+        .iter()
+        .filter(|e| e.change.as_ref().is_some_and(is_valid_change))
+        .collect();
+
+    if with_valid_change.is_empty() {
+        return None;
+    }
+
+    // Biggest gain = most negative point_estimate (fastest improvement)
+    let best = with_valid_change
+        .iter()
+        .min_by(|a, b| {
+            a.change
+                .as_ref()
+                .unwrap()
+                .point_estimate
+                .partial_cmp(&b.change.as_ref().unwrap().point_estimate)
+                .unwrap()
+        })
+        .unwrap();
+
+    // Worst regression = most positive point_estimate (biggest slowdown)
+    let worst = with_valid_change
+        .iter()
+        .max_by(|a, b| {
+            a.change
+                .as_ref()
+                .unwrap()
+                .point_estimate
+                .partial_cmp(&b.change.as_ref().unwrap().point_estimate)
+                .unwrap()
+        })
+        .unwrap();
+
+    Some(SummaryInfo {
+        best_id: best.full_id.clone(),
+        best_change: format_change(&best.change),
+        best_is_gain: best.change.as_ref().unwrap().point_estimate < 0.0,
+        worst_id: worst.full_id.clone(),
+        worst_change: format_change(&worst.change),
+        worst_is_regression: worst.change.as_ref().unwrap().point_estimate > 0.0,
+    })
+}
+
+/// Writes a summary section with the biggest gain and worst regression.
+fn write_summary(out: &mut String, entries: &[BenchEntry]) {
+    let Some(info) = compute_summary(entries) else {
+        return;
+    };
+
+    writeln!(out, "## Summary\n").unwrap();
+
+    let best_label = if info.best_is_gain {
+        "Biggest gain"
+    } else {
+        "Least regression"
+    };
+    let worst_label = if info.worst_is_regression {
+        "Worst regression"
+    } else {
+        "Least gain"
+    };
+
+    writeln!(
+        out,
+        "- **{best_label}:** `{}` — {}",
+        info.best_id, info.best_change
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "- **{worst_label}:** `{}` — {}",
+        info.worst_id, info.worst_change
+    )
+    .unwrap();
 }
