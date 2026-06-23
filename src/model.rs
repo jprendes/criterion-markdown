@@ -4,7 +4,7 @@ use serde::Deserialize;
 #[derive(Deserialize)]
 pub(crate) struct BenchmarkMeta {
     pub(crate) group_id: String,
-    pub(crate) function_id: String,
+    pub(crate) function_id: Option<String>,
     pub(crate) value_str: Option<String>,
     pub(crate) throughput: Option<Throughput>,
     pub(crate) full_id: String,

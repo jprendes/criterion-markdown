@@ -83,7 +83,7 @@ fn read_benchmark_entry(new_dir: &Path) -> Result<Option<BenchEntry>> {
     Ok(Some(BenchEntry {
         full_id: meta.full_id,
         group_id: meta.group_id,
-        function_id: meta.function_id,
+        function_id: meta.function_id.unwrap_or_default(),
         value_str: meta.value_str,
         throughput: meta.throughput,
         estimate_ns,
