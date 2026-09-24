@@ -5,52 +5,63 @@
 ## What It Does
 
 - Walks a Criterion result directory and discovers benchmark runs.
-- Reads `benchmark.json`, `estimates.json`, and optional `change/estimates.json`.
+- Reads `benchmark.json` and `estimates.json` from the latest run and selected baseline.
 - Produces grouped markdown tables with human-readable timings and change indicators.
+- Computes improvements and regressions at render time, so any saved Criterion baseline can be selected.
 
 ## Usage
 
-This crate exposes two entrypoints:
-
-- `criterion_markdown::render(criterion_dir, allowlist)` — render with default options.
-- `criterion_markdown::render_with_options(criterion_dir, allowlist, &options)` — render with custom [`RenderOptions`].
-
-Where:
-
-- `criterion_dir` points to a Criterion output directory (for example, `target/criterion`).
-- `allowlist` is an iterable of benchmark ids (`Vec<String>`, `&[String]`, `Vec<&str>`, etc.).
-  If empty, no filtering is applied.
-
-### Options
-
-`RenderOptions` has the following fields:
-
-- `collapsible: Option<String>` — if set, wraps the output in a `<details><summary>…</summary></details>` tag using the provided value as the summary text. The summary tag also includes the best/worst change range.
-
-### Example
+Use `Renderer` to select datasets, filter benchmarks, and configure the output:
 
 ```rust
-use criterion_markdown::RenderOptions;
+use criterion_markdown::{ChangeThresholds, Renderer};
 
 fn main() -> anyhow::Result<()> {
-    // Basic usage
-    let markdown = criterion_markdown::render("target/criterion", std::iter::empty::<&str>())?;
-    println!("{markdown}");
+        let thresholds = ChangeThresholds::default()
+                .improvement_ratio(1.1)
+                .strong_improvement_ratio(1.5)
+                .regression_ratio(0.95);
+        let markdown = Renderer::new("target/criterion")
+                .candidate("new")
+                .baseline_root("artifacts/criterion")
+                .baseline("main")
+                .benchmark("group/benchmark/1")
+                .benchmarks(["group/benchmark/2", "group/benchmark/3"])
+                .change_thresholds(thresholds)
+                .summary_limit(5)
+                .title("Benchmark Results")
+                .collapsible(true)
+                .render()?;
 
-    // Collapsible output
-    let options = RenderOptions {
-        collapsible: Some("Benchmark Results".into()),
-    };
-    let markdown = criterion_markdown::render_with_options(
-        "target/criterion",
-        std::iter::empty::<&str>(),
-        &options,
-    )?;
-    println!("{markdown}");
-
-    Ok(())
+        println!("{markdown}");
+        Ok(())
 }
 ```
+
+The builder defaults to the `new` candidate, the `base` baseline, the same Criterion root for both datasets, all benchmark entries, the title `Benchmarks`, and non-collapsible output. Calls to `benchmark` and `benchmarks` are additive. Use `title` to configure the top-level Markdown heading or `<summary>` label, and `collapsible(true)` to wrap the report in a `<details>` element.
+
+The summary appears before the detailed benchmark tables. It lists the top three improvements and top three regressions by default, using the same configured thresholds as the table indicators and omitting either category when it has no entries. If no compared benchmark crosses either threshold, the summary says so explicitly. Use `summary_limit` to set the maximum number shown in each category; a limit of `0` omits the summary.
+
+Change thresholds use the ratio `baseline time / candidate time`. The defaults classify changes as follows:
+
+- `ratio <= 0.9`: ❌ regression
+- `0.9 < ratio < 1.1`: ➖ neutral
+- `1.1 <= ratio < 1.8`: ↗️ improvement
+- `ratio >= 1.8`: 🚀 strong improvement
+
+Invalid or incorrectly ordered threshold configurations return an error from `render`.
+
+`baseline_root` can point to a separate Criterion output tree, such as a downloaded CI artifact. For each candidate benchmark, the renderer reads the baseline from the same relative benchmark path beneath that root.
+
+The existing free functions remain available as convenience entrypoints:
+
+- `criterion_markdown::render(criterion_dir, allowlist)` renders the `new` candidate against `base`.
+- `criterion_markdown::render_with_options(criterion_dir, allowlist, &options)` additionally configures the baseline, title, and collapsible output through `RenderOptions`.
+
+The change point estimate is computed with the same formula Criterion uses:
+`candidate_mean / baseline_mean - 1`. Selecting the same candidate and baseline Criterion used for a run therefore produces the same point estimate as its `change/estimates.json` output. Benchmarks that do not have the selected baseline render `---` for their change.
+
+For comparisons rendered after the benchmark run, prefer a stable named baseline created with Criterion's `--save-baseline <name>` option. Criterion's default save mode can replace `base` with the new measurements after computing its change, so that directory may no longer contain the historical data used by the precomputed comparison.
 
 ## How This Differs From criterion-table
 

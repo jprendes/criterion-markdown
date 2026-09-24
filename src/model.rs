@@ -32,22 +32,18 @@ pub(crate) struct Estimate {
     pub(crate) point_estimate: f64,
 }
 
-/// Change estimates from a criterion `change/estimates.json` file.
-#[derive(Deserialize)]
-pub(crate) struct ChangeEstimates {
-    pub(crate) mean: ChangeEstimate,
-}
-
-/// A single change estimate with point value.
-#[derive(Deserialize)]
-pub(crate) struct ChangeEstimate {
-    pub(crate) point_estimate: f64,
-}
-
 /// Parsed change information for a benchmark.
 pub(crate) struct ChangeInfo {
     /// Relative change as a fraction (e.g., 0.05 = +5%, -0.02 = -2%).
     pub(crate) point_estimate: f64,
+}
+
+impl ChangeInfo {
+    pub(crate) fn from_estimates(current: &Estimates, baseline: &Estimates) -> Self {
+        Self {
+            point_estimate: current.mean.point_estimate / baseline.mean.point_estimate - 1.0,
+        }
+    }
 }
 
 /// A single benchmark entry with its metadata and timing.
@@ -59,7 +55,7 @@ pub(crate) struct BenchEntry {
     pub(crate) estimate_ns: f64,
     #[allow(dead_code)]
     pub(crate) throughput: Option<Throughput>,
-    /// Change vs the stored baseline, if available.
+    /// Change vs the selected baseline, if available.
     pub(crate) change: Option<ChangeInfo>,
 }
 
@@ -88,5 +84,50 @@ impl BenchEntry {
         self.function_id
             .rfind('/')
             .map(|idx| &self.function_id[idx + 1..])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde::Deserialize;
+
+    use super::{ChangeInfo, Estimate, Estimates};
+
+    #[derive(Deserialize)]
+    struct CriterionChangeEstimates {
+        mean: Estimate,
+    }
+
+    #[test]
+    fn computed_change_exactly_matches_criterion_point_estimate() {
+        // Captured from the example benchmark after running Criterion with
+        // `--save-baseline main`, followed by `--baseline main`.
+        let current: Estimates = serde_json::from_str(
+            r#"{
+                "mean": { "point_estimate": 0.4963816178911267 },
+                "slope": null
+            }"#,
+        )
+        .expect("parse current Criterion estimates");
+        let baseline: Estimates = serde_json::from_str(
+            r#"{
+                "mean": { "point_estimate": 0.499565914117225 },
+                "slope": null
+            }"#,
+        )
+        .expect("parse baseline Criterion estimates");
+        let criterion_change: CriterionChangeEstimates = serde_json::from_str(
+            r#"{
+                "mean": { "point_estimate": -0.006374126288670401 }
+            }"#,
+        )
+        .expect("parse Criterion change estimates");
+
+        let computed = ChangeInfo::from_estimates(&current, &baseline);
+
+        assert_eq!(
+            computed.point_estimate,
+            criterion_change.mean.point_estimate
+        );
     }
 }
