@@ -9,9 +9,10 @@ pub(crate) fn discover_benchmarks(
     criterion_dir: &Path,
     candidate: &str,
     baseline_root: &Path,
-    baseline: &str,
+    baseline: Option<&str>,
 ) -> Result<Vec<BenchEntry>> {
     let mut entries = Vec::new();
+    let mut explicit_baseline_found = false;
     walk_for_benchmarks(
         criterion_dir,
         criterion_dir,
@@ -19,7 +20,16 @@ pub(crate) fn discover_benchmarks(
         baseline_root,
         baseline,
         &mut entries,
+        &mut explicit_baseline_found,
     )?;
+    if let Some(baseline) = baseline {
+        if !explicit_baseline_found {
+            anyhow::bail!(
+                "Baseline dataset '{baseline}' not found in {}",
+                baseline_root.display()
+            );
+        }
+    }
     Ok(entries)
 }
 
@@ -29,8 +39,9 @@ fn walk_for_benchmarks(
     dir: &Path,
     candidate: &str,
     baseline_root: &Path,
-    baseline: &str,
+    baseline: Option<&str>,
     entries: &mut Vec<BenchEntry>,
+    explicit_baseline_found: &mut bool,
 ) -> Result<()> {
     let candidate_dir = dir.join(candidate);
     if candidate_dir.join("benchmark.json").exists() {
@@ -41,8 +52,13 @@ fn walk_for_benchmarks(
                 criterion_dir.display()
             )
         })?;
-        let baseline_dir = baseline_root.join(benchmark_path).join(baseline);
-        if let Some(entry) = read_benchmark_entry(&candidate_dir, &baseline_dir)? {
+        let baseline_dir = baseline_root
+            .join(benchmark_path)
+            .join(baseline.unwrap_or("base"));
+        if baseline.is_some() && baseline_dir.join("estimates.json").exists() {
+            *explicit_baseline_found = true;
+        }
+        if let Some(entry) = read_benchmark_entry(&candidate_dir, Some(&baseline_dir))? {
             entries.push(entry);
         }
         return Ok(());
@@ -67,6 +83,7 @@ fn walk_for_benchmarks(
                 baseline_root,
                 baseline,
                 entries,
+                explicit_baseline_found,
             )?;
         }
     }
@@ -75,7 +92,10 @@ fn walk_for_benchmarks(
 }
 
 /// Reads a single benchmark entry from a candidate directory.
-fn read_benchmark_entry(candidate_dir: &Path, baseline_dir: &Path) -> Result<Option<BenchEntry>> {
+fn read_benchmark_entry(
+    candidate_dir: &Path,
+    baseline_dir: Option<&Path>,
+) -> Result<Option<BenchEntry>> {
     let meta_path = candidate_dir.join("benchmark.json");
     let estimates_path = candidate_dir.join("estimates.json");
 
@@ -102,10 +122,9 @@ fn read_benchmark_entry(candidate_dir: &Path, baseline_dir: &Path) -> Result<Opt
         .unwrap_or(&estimates.mean)
         .point_estimate;
 
-    let baseline_path = baseline_dir.join("estimates.json");
-    let change = baseline_path
-        .exists()
-        .then_some(baseline_path)
+    let change = baseline_dir
+        .map(|dir| dir.join("estimates.json"))
+        .filter(|path| path.exists())
         .and_then(|p| {
             let data = std::fs::read_to_string(&p).ok()?;
             let baseline_estimates: Estimates = serde_json::from_str(&data).ok()?;

@@ -102,10 +102,10 @@ pub struct RenderOptions {
     pub title: String,
     /// Whether to wrap the output in a `<details>` element.
     pub collapsible: bool,
-    /// The Criterion baseline directory to compare against. Defaults to `base`.
+    /// The Criterion baseline directory to compare against.
     ///
-    /// Changes are computed at render time from this baseline's mean estimate.
-    pub baseline: String,
+    /// When unset, the renderer looks for Criterion's default `base` dataset.
+    pub baseline: Option<String>,
 }
 
 impl Default for RenderOptions {
@@ -113,7 +113,7 @@ impl Default for RenderOptions {
         Self {
             title: "Benchmarks".to_string(),
             collapsible: false,
-            baseline: "base".to_string(),
+            baseline: None,
         }
     }
 }
@@ -124,7 +124,7 @@ pub struct Renderer {
     criterion_dir: PathBuf,
     baseline_root: PathBuf,
     candidate: String,
-    baseline: String,
+    baseline: Option<String>,
     included_entries: Vec<String>,
     title: String,
     collapsible: bool,
@@ -140,7 +140,7 @@ impl Renderer {
             baseline_root: criterion_dir.clone(),
             criterion_dir,
             candidate: "new".to_string(),
-            baseline: "base".to_string(),
+            baseline: None,
             included_entries: Vec::new(),
             title: "Benchmarks".to_string(),
             collapsible: false,
@@ -155,9 +155,13 @@ impl Renderer {
         self
     }
 
-    /// Selects the baseline used to compute changes. Defaults to `base`.
+    /// Selects the baseline used to compute changes.
+    ///
+    /// If not selected, the renderer uses Criterion's default `base` dataset
+    /// when it exists and otherwise omits comparison information. Rendering
+    /// fails if an explicitly selected baseline cannot be found.
     pub fn baseline(mut self, baseline: impl AsRef<str>) -> Self {
-        self.baseline = baseline.as_ref().to_string();
+        self.baseline = Some(baseline.as_ref().to_string());
         self
     }
 
@@ -219,7 +223,7 @@ impl Renderer {
             &self.criterion_dir,
             &self.candidate,
             &self.baseline_root,
-            &self.baseline,
+            self.baseline.as_deref(),
         )?;
         if !self.included_entries.is_empty() {
             entries.retain(|entry| self.included_entries.contains(&entry.full_id));
@@ -272,10 +276,12 @@ pub fn render_with_options(
     allowlist: impl IntoIterator<Item = impl AsRef<str>>,
     options: &RenderOptions,
 ) -> Result<String> {
-    let renderer = Renderer::new(criterion_dir)
+    let mut renderer = Renderer::new(criterion_dir)
         .benchmarks(allowlist)
-        .baseline(&options.baseline)
         .title(&options.title)
         .collapsible(options.collapsible);
+    if let Some(baseline) = &options.baseline {
+        renderer = renderer.baseline(baseline);
+    }
     renderer.render()
 }

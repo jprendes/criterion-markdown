@@ -16,7 +16,9 @@ fn renders_markdown_from_fixture_criterion_results() {
         mean_ns: 12_345.0,
         change: Some(-0.1),
     });
-    let output = criterion_markdown::render(&dir, std::iter::empty::<&str>())
+    let output = criterion_markdown::Renderer::new(&dir)
+        .baseline("base")
+        .render()
         .expect("render should succeed");
 
     assert!(output.contains("# Benchmarks"));
@@ -58,7 +60,28 @@ fn renderer_uses_custom_title() {
 }
 
 #[test]
-fn renders_placeholder_when_change_file_missing() {
+fn renderer_uses_default_baseline_when_available() {
+    let dir = write_fixture(FixtureSpec {
+        test_name: "no-default-baseline",
+        group_id: "example_group",
+        function_id: "sum/1000",
+        value_str: None,
+        full_id: "example_group/sum/1000",
+        slope_ns: 12_000.0,
+        mean_ns: 12_345.0,
+        change: Some(-0.5),
+    });
+
+    let output = criterion_markdown::render(&dir, std::iter::empty::<&str>())
+        .expect("render should succeed");
+
+    assert!(output.contains("`12.00 µs`"));
+    assert!(output.contains("🚀 **2.00x faster**"));
+    assert!(output.contains("## Top improvements"));
+}
+
+#[test]
+fn omits_comparisons_when_baseline_is_missing() {
     let dir = write_fixture(FixtureSpec {
         test_name: "missing-change",
         group_id: "missing_change_group",
@@ -74,7 +97,80 @@ fn renders_placeholder_when_change_file_missing() {
         .expect("render should succeed");
 
     assert!(output.contains("### missing_change_group"));
+    assert!(output.contains("`2.00 µs`"));
+    assert!(!output.contains("(---)"));
+    assert!(!output.contains("improved or regressed"));
+
+    let collapsible = criterion_markdown::Renderer::new(&dir)
+        .title("Missing baseline")
+        .collapsible(true)
+        .render()
+        .expect("collapsible render should succeed");
+    assert!(collapsible.starts_with("<details>\n<summary>Missing baseline</summary>"));
+    assert!(!collapsible.contains("(---)"));
+}
+
+#[test]
+fn errors_when_explicit_baseline_is_missing() {
+    let dir = write_fixture(FixtureSpec {
+        test_name: "missing-explicit-baseline",
+        group_id: "missing_baseline_group",
+        function_id: "sum/2000",
+        value_str: None,
+        full_id: "missing_baseline_group/sum/2000",
+        slope_ns: 2_000.0,
+        mean_ns: 2_100.0,
+        change: None,
+    });
+
+    let error = criterion_markdown::Renderer::new(&dir)
+        .baseline("main")
+        .render()
+        .expect_err("missing explicit baseline should fail");
+
+    assert!(error
+        .to_string()
+        .contains("Baseline dataset 'main' not found"));
+    assert!(error.to_string().contains(&dir.display().to_string()));
+}
+
+#[test]
+fn renders_placeholder_when_one_benchmark_is_missing_from_baseline() {
+    let dir = unique_temp_fixture_dir("partial-baseline");
+    write_fixture_to(
+        &dir,
+        FixtureSpec {
+            test_name: "",
+            group_id: "partial_group",
+            function_id: "missing/1",
+            value_str: None,
+            full_id: "partial_group/missing/1",
+            slope_ns: 100.0,
+            mean_ns: 100.0,
+            change: None,
+        },
+    );
+    write_fixture_to(
+        &dir,
+        FixtureSpec {
+            test_name: "",
+            group_id: "partial_group",
+            function_id: "compared/1",
+            value_str: None,
+            full_id: "partial_group/compared/1",
+            slope_ns: 100.0,
+            mean_ns: 100.0,
+            change: Some(-0.5),
+        },
+    );
+
+    let output = criterion_markdown::Renderer::new(&dir)
+        .baseline("base")
+        .render()
+        .expect("render should succeed");
+
     assert!(output.contains("(---)"));
+    assert!(output.contains("🚀 **2.00x faster**"));
 }
 
 #[test]
@@ -137,7 +233,9 @@ fn handles_non_positive_change_ratio_as_not_available() {
     });
     write_estimates(&dir.join(full_id).join("base"), 0.0, 0.0);
 
-    let output = criterion_markdown::render(&dir, std::iter::empty::<&str>())
+    let output = criterion_markdown::Renderer::new(&dir)
+        .baseline("base")
+        .render()
         .expect("render should succeed");
 
     assert!(output.contains("⚠ n/a"));
@@ -159,7 +257,7 @@ fn wraps_in_details_summary_when_option_set() {
     let options = criterion_markdown::RenderOptions {
         title: "Benchmark Results".to_string(),
         collapsible: true,
-        ..Default::default()
+        baseline: Some("base".to_string()),
     };
     let output =
         criterion_markdown::render_with_options(&dir, std::iter::empty::<&str>(), &options)
@@ -215,7 +313,9 @@ fn summary_lists_gain_and_regression() {
         },
     );
 
-    let output = criterion_markdown::render(&base, std::iter::empty::<&str>())
+    let output = criterion_markdown::Renderer::new(&base)
+        .baseline("base")
+        .render()
         .expect("render should succeed");
 
     assert!(output.contains("## Top improvements"));
@@ -255,6 +355,7 @@ fn summary_limits_and_orders_each_category() {
     }
 
     let output = criterion_markdown::Renderer::new(&base)
+        .baseline("base")
         .summary_limit(2)
         .render()
         .expect("render with summary limit should succeed");
@@ -297,6 +398,7 @@ fn summary_reports_when_no_benchmark_changed() {
     }
 
     let output = criterion_markdown::Renderer::new(&dir)
+        .baseline("base")
         .render()
         .expect("unchanged render should succeed");
 
@@ -322,6 +424,7 @@ fn disabled_summary_omits_no_change_message() {
     });
 
     let output = criterion_markdown::Renderer::new(&dir)
+        .baseline("base")
         .summary_limit(0)
         .render()
         .expect("render without summary should succeed");
@@ -357,7 +460,7 @@ fn computes_change_from_selected_baseline() {
     .expect("write change fixture");
 
     let options = criterion_markdown::RenderOptions {
-        baseline: "previous".to_string(),
+        baseline: Some("previous".to_string()),
         ..Default::default()
     };
     let output =
@@ -455,6 +558,35 @@ fn renderer_loads_baseline_from_separate_root() {
 }
 
 #[test]
+fn renderer_finds_default_baseline_in_separate_root() {
+    let candidate_root = unique_temp_fixture_dir("candidate-default-root");
+    let baseline_root = unique_temp_fixture_dir("baseline-default-root");
+    let full_id = "external_group/function/1000";
+
+    write_fixture_to(
+        &candidate_root,
+        FixtureSpec {
+            test_name: "",
+            group_id: "external_group",
+            function_id: "function/1000",
+            value_str: None,
+            full_id,
+            slope_ns: 100.0,
+            mean_ns: 100.0,
+            change: None,
+        },
+    );
+    write_estimates(&baseline_root.join(full_id).join("base"), 200.0, 200.0);
+
+    let output = criterion_markdown::Renderer::new(&candidate_root)
+        .baseline_root(&baseline_root)
+        .render()
+        .expect("render with detected external baseline should succeed");
+
+    assert!(output.contains("🚀 **2.00x faster**"));
+}
+
+#[test]
 fn renderer_uses_custom_change_thresholds() {
     let base = unique_temp_fixture_dir("change-thresholds");
 
@@ -482,6 +614,7 @@ fn renderer_uses_custom_change_thresholds() {
         .strong_improvement_ratio(1.5)
         .regression_ratio(0.96);
     let output = criterion_markdown::Renderer::new(&base)
+        .baseline("base")
         .change_thresholds(thresholds)
         .render()
         .expect("render with custom thresholds should succeed");

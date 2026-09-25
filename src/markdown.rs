@@ -20,6 +20,7 @@ pub(crate) fn format_table(
     for entry in entries {
         groups.entry(&entry.group_id).or_default().push(entry);
     }
+    let show_comparisons = entries.iter().any(|entry| entry.change.is_some());
 
     let mut out = String::new();
     if !skip_title {
@@ -32,7 +33,7 @@ pub(crate) fn format_table(
 
     for (group_id, group_entries) in &groups {
         writeln!(out, "### {group_id}\n").unwrap();
-        write_group_table(&mut out, group_entries, thresholds);
+        write_group_table(&mut out, group_entries, thresholds, show_comparisons);
         writeln!(out).unwrap();
     }
 
@@ -40,7 +41,12 @@ pub(crate) fn format_table(
 }
 
 /// Writes a markdown table for a single benchmark group.
-fn write_group_table(out: &mut String, entries: &[&BenchEntry], thresholds: ChangeThresholds) {
+fn write_group_table(
+    out: &mut String,
+    entries: &[&BenchEntry],
+    thresholds: ChangeThresholds,
+    show_comparisons: bool,
+) {
     // Collect unique functions (columns) and values (rows), preserving order
     let mut functions: Vec<&str> = Vec::new();
     let mut values: Vec<Option<&str>> = Vec::new();
@@ -89,8 +95,12 @@ fn write_group_table(out: &mut String, entries: &[&BenchEntry], thresholds: Chan
         for func in &functions {
             if let Some(&entry) = lookup.get(&(*func, *val)) {
                 let time_str = format_time(entry.estimate_ns);
-                let change_str = format_change(&entry.change, thresholds);
-                write!(out, " | `{time_str}` ({change_str}) ").unwrap();
+                if show_comparisons {
+                    let change_str = format_change(&entry.change, thresholds);
+                    write!(out, " | `{time_str}` ({change_str}) ").unwrap();
+                } else {
+                    write!(out, " | `{time_str}` ").unwrap();
+                }
             } else {
                 write!(out, " |                          ").unwrap();
             }

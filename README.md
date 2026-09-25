@@ -38,7 +38,7 @@ fn main() -> anyhow::Result<()> {
 }
 ```
 
-The builder defaults to the `new` candidate, the `base` baseline, the same Criterion root for both datasets, all benchmark entries, the title `Benchmarks`, and non-collapsible output. Calls to `benchmark` and `benchmarks` are additive. Use `title` to configure the top-level Markdown heading or `<summary>` label, and `collapsible(true)` to wrap the report in a `<details>` element.
+The builder defaults to the `new` candidate, all benchmark entries, the title `Benchmarks`, and non-collapsible output. When no baseline is specified, it uses Criterion's default `base` dataset if present and otherwise omits comparison information. An explicitly selected baseline that cannot be found returns an error. Calls to `benchmark` and `benchmarks` are additive. Use `baseline` to select a different dataset, `title` to configure the top-level Markdown heading or `<summary>` label, and `collapsible(true)` to wrap the report in a `<details>` element.
 
 The summary appears before the detailed benchmark tables. It lists the top three improvements and top three regressions by default, using the same configured thresholds as the table indicators and omitting either category when it has no entries. If no compared benchmark crosses either threshold, the summary says so explicitly. Use `summary_limit` to set the maximum number shown in each category; a limit of `0` omits the summary.
 
@@ -51,15 +51,15 @@ Change thresholds use the ratio `baseline time / candidate time`. The defaults c
 
 Invalid or incorrectly ordered threshold configurations return an error from `render`.
 
-`baseline_root` can point to a separate Criterion output tree, such as a downloaded CI artifact. For each candidate benchmark, the renderer reads the baseline from the same relative benchmark path beneath that root.
+`baseline_root` can point to a separate Criterion output tree, such as a downloaded CI artifact. It is also where the renderer looks for the default `base` dataset when no baseline is specified. For each candidate benchmark, the renderer reads the baseline from the same relative benchmark path beneath that root.
 
 The existing free functions remain available as convenience entrypoints:
 
-- `criterion_markdown::render(criterion_dir, allowlist)` renders the `new` candidate against `base`.
-- `criterion_markdown::render_with_options(criterion_dir, allowlist, &options)` additionally configures the baseline, title, and collapsible output through `RenderOptions`.
+- `criterion_markdown::render(criterion_dir, allowlist)` renders the `new` candidate and compares it with `base` when available.
+- `criterion_markdown::render_with_options(criterion_dir, allowlist, &options)` additionally configures an optional baseline, title, and collapsible output through `RenderOptions`.
 
 The change point estimate is computed with the same formula Criterion uses:
-`candidate_mean / baseline_mean - 1`. Selecting the same candidate and baseline Criterion used for a run therefore produces the same point estimate as its `change/estimates.json` output. Benchmarks that do not have the selected baseline render `---` for their change.
+`candidate_mean / baseline_mean - 1`. Selecting the same candidate and baseline Criterion used for a run therefore produces the same point estimate as its `change/estimates.json` output. If the selected baseline is absent for every benchmark, the report omits comparison information. If the baseline exists for only some benchmarks, entries without it render `---` for their change.
 
 For comparisons rendered after the benchmark run, prefer a stable named baseline created with Criterion's `--save-baseline <name>` option. Criterion's default save mode can replace `base` with the new measurements after computing its change, so that directory may no longer contain the historical data used by the precomputed comparison.
 
