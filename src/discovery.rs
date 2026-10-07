@@ -115,12 +115,7 @@ fn read_benchmark_entry(
     )
     .with_context(|| format!("Failed to parse {}", estimates_path.display()))?;
 
-    // Prefer slope (linear regression) over mean, matching criterion's "typical" behavior
-    let estimate_ns = estimates
-        .slope
-        .as_ref()
-        .unwrap_or(&estimates.mean)
-        .point_estimate;
+    let estimate_ns = estimates.typical().point_estimate;
 
     let change = baseline_dir
         .map(|dir| dir.join("estimates.json"))

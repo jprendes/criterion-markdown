@@ -697,20 +697,30 @@ fn write_fixture_to(base: &Path, spec: FixtureSpec<'_>) {
     write_estimates(&new_dir, spec.mean_ns, spec.slope_ns);
 
     if let Some(change_point_estimate) = spec.change {
-        let baseline_mean_ns = spec.mean_ns / (1.0 + change_point_estimate);
+        // Scale both estimates so the intended change holds for whichever one
+        // the comparison selects.
+        let scale = 1.0 + change_point_estimate;
         write_estimates(
             &base.join(spec.full_id).join("base"),
-            baseline_mean_ns,
-            baseline_mean_ns,
+            spec.mean_ns / scale,
+            spec.slope_ns / scale,
         );
     }
 }
 
 fn write_estimates(dir: &Path, mean_ns: f64, slope_ns: f64) {
     fs::create_dir_all(dir).expect("failed to create estimates fixture directory");
+    // Degenerate intervals keep these fixtures about rendering and baseline
+    // selection. Interval handling is covered by the unit tests.
     let estimates = json!({
-        "mean": { "point_estimate": mean_ns },
-        "slope": { "point_estimate": slope_ns },
+        "mean": {
+            "point_estimate": mean_ns,
+            "confidence_interval": { "lower_bound": mean_ns, "upper_bound": mean_ns },
+        },
+        "slope": {
+            "point_estimate": slope_ns,
+            "confidence_interval": { "lower_bound": slope_ns, "upper_bound": slope_ns },
+        },
     });
     fs::write(
         dir.join("estimates.json"),

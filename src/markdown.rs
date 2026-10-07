@@ -172,12 +172,21 @@ fn classify_change(change: &ChangeInfo, thresholds: ChangeThresholds) -> ChangeC
         return ChangeClassification::Invalid;
     }
 
-    let compare = 1.0 / ratio;
-    let kind = if compare >= thresholds.strong_improvement_ratio {
+    // A verdict needs the whole interval past the threshold, so a single noisy
+    // run cannot announce a change on its own. Where the interval is unusable,
+    // the point estimate stands in for both ends.
+    let (lower, upper) = match (change.lower_ratio, change.upper_ratio) {
+        (lower, upper) if lower.is_finite() && upper.is_finite() && lower > 0.0 => (lower, upper),
+        _ => (ratio, ratio),
+    };
+    let best = 1.0 / lower;
+    let worst = 1.0 / upper;
+
+    let kind = if worst >= thresholds.strong_improvement_ratio {
         ChangeKind::StrongImprovement
-    } else if compare >= thresholds.improvement_ratio {
+    } else if worst >= thresholds.improvement_ratio {
         ChangeKind::Improvement
-    } else if compare > thresholds.regression_ratio {
+    } else if best > thresholds.regression_ratio {
         ChangeKind::Neutral
     } else {
         ChangeKind::Regression
@@ -357,12 +366,34 @@ mod tests {
     fn compact_change_preserves_modest_improvement_icon() {
         let change = ChangeInfo {
             point_estimate: 1.0 / 1.2 - 1.0,
+            lower_ratio: 1.0 / 1.2,
+            upper_ratio: 1.0 / 1.2,
         };
 
         assert_eq!(
             format_compact_change(&change, ChangeThresholds::default()),
             "↗️ 1.20x"
         );
+    }
+
+    /// A point estimate past the threshold is not enough on its own. The
+    /// interval has to clear it too, otherwise a noisy run reports a change.
+    #[test]
+    fn compact_change_holds_back_a_verdict_the_interval_does_not_support() {
+        let decided = ChangeInfo {
+            point_estimate: 2.0 - 1.0,
+            lower_ratio: 1.9,
+            upper_ratio: 2.1,
+        };
+        let undecided = ChangeInfo {
+            point_estimate: 2.0 - 1.0,
+            lower_ratio: 0.8,
+            upper_ratio: 3.2,
+        };
+        let thresholds = ChangeThresholds::default();
+
+        assert_eq!(format_compact_change(&decided, thresholds), "❌ 2.00x");
+        assert_eq!(format_compact_change(&undecided, thresholds), "➖ 2.00x");
     }
 
     #[test]

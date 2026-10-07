@@ -26,22 +26,56 @@ pub(crate) struct Estimates {
     pub(crate) mean: Estimate,
 }
 
+impl Estimates {
+    /// The estimate criterion reports as typical.
+    ///
+    /// Linear sampling fits a regression whose slope is weighted towards the
+    /// longest samples, so warm-up in the short ones barely moves it. Flat
+    /// sampling fits no regression and leaves the mean.
+    pub(crate) fn typical(&self) -> &Estimate {
+        self.slope.as_ref().unwrap_or(&self.mean)
+    }
+}
+
 /// A single statistical estimate with confidence interval.
 #[derive(Deserialize)]
 pub(crate) struct Estimate {
     pub(crate) point_estimate: f64,
+    pub(crate) confidence_interval: ConfidenceInterval,
+}
+
+/// The bounds criterion bootstrapped for an estimate.
+#[derive(Deserialize)]
+pub(crate) struct ConfidenceInterval {
+    pub(crate) lower_bound: f64,
+    pub(crate) upper_bound: f64,
 }
 
 /// Parsed change information for a benchmark.
 pub(crate) struct ChangeInfo {
     /// Relative change as a fraction (e.g., 0.05 = +5%, -0.02 = -2%).
     pub(crate) point_estimate: f64,
+    /// Smallest ratio of current to baseline both intervals allow.
+    pub(crate) lower_ratio: f64,
+    /// Largest ratio of current to baseline both intervals allow.
+    pub(crate) upper_ratio: f64,
 }
 
 impl ChangeInfo {
     pub(crate) fn from_estimates(current: &Estimates, baseline: &Estimates) -> Self {
+        // Compare like with like. A benchmark whose sampling mode changed
+        // between the two runs shares only the mean.
+        let (current, baseline) = match (&current.slope, &baseline.slope) {
+            (Some(current), Some(baseline)) => (current, baseline),
+            _ => (&current.mean, &baseline.mean),
+        };
+
         Self {
-            point_estimate: current.mean.point_estimate / baseline.mean.point_estimate - 1.0,
+            point_estimate: current.point_estimate / baseline.point_estimate - 1.0,
+            lower_ratio: current.confidence_interval.lower_bound
+                / baseline.confidence_interval.upper_bound,
+            upper_ratio: current.confidence_interval.upper_bound
+                / baseline.confidence_interval.lower_bound,
         }
     }
 }
@@ -89,45 +123,103 @@ impl BenchEntry {
 
 #[cfg(test)]
 mod tests {
-    use serde::Deserialize;
+    use super::{ChangeInfo, Estimates};
 
-    use super::{ChangeInfo, Estimate, Estimates};
+    /// Estimates where the slope and the mean disagree, taken from
+    /// `slot_pool/alloc_dealloc_1500` on a run whose first 32 samples were
+    /// still warming up. The mean reads 1.56x slower, the slope 0.93x.
+    const WARMED_UP: &str = r#"{
+        "mean": {
+            "point_estimate": 12.952912949016083,
+            "confidence_interval": { "lower_bound": 11.260847001464509,
+                                     "upper_bound": 14.722386453354728 }
+        },
+        "slope": {
+            "point_estimate": 7.707953797660542,
+            "confidence_interval": { "lower_bound": 7.360335814242837,
+                                     "upper_bound": 8.182146986705531 }
+        }
+    }"#;
 
-    #[derive(Deserialize)]
-    struct CriterionChangeEstimates {
-        mean: Estimate,
+    const STEADY: &str = r#"{
+        "mean": {
+            "point_estimate": 8.299592350746269,
+            "confidence_interval": { "lower_bound": 8.264150943396226,
+                                     "upper_bound": 8.340989399293286 }
+        },
+        "slope": {
+            "point_estimate": 8.333333333333334,
+            "confidence_interval": { "lower_bound": 8.291666666666666,
+                                     "upper_bound": 8.375000000000000 }
+        }
+    }"#;
+
+    fn parse(json: &str) -> Estimates {
+        serde_json::from_str(json).expect("parse criterion estimates")
+    }
+
+    /// The reported time comes from the slope, so the change must too.
+    /// Comparing means here would call a faster benchmark 1.56x slower.
+    #[test]
+    fn change_follows_the_estimate_the_report_displays() {
+        let current = parse(WARMED_UP);
+        let baseline = parse(STEADY);
+
+        let change = ChangeInfo::from_estimates(&current, &baseline);
+        let ratio = 1.0 + change.point_estimate;
+
+        assert!(
+            (ratio - 0.924_954_455_7).abs() < 1e-9,
+            "expected the slope ratio, got {ratio}"
+        );
+    }
+
+    /// Flat sampling records no slope, leaving the mean as the only estimate.
+    #[test]
+    fn change_falls_back_to_the_mean_without_a_slope() {
+        let flat = r#"{
+            "mean": {
+                "point_estimate": 2.0,
+                "confidence_interval": { "lower_bound": 1.9, "upper_bound": 2.1 }
+            },
+            "slope": null
+        }"#;
+        let baseline = r#"{
+            "mean": {
+                "point_estimate": 1.0,
+                "confidence_interval": { "lower_bound": 0.95, "upper_bound": 1.05 }
+            },
+            "slope": null
+        }"#;
+
+        let change = ChangeInfo::from_estimates(&parse(flat), &parse(baseline));
+
+        assert!((change.point_estimate - 1.0).abs() < 1e-9);
+    }
+
+    /// One side losing its slope leaves the mean as the only shared estimate.
+    #[test]
+    fn change_compares_like_with_like_when_sampling_mode_changes() {
+        let baseline = r#"{
+            "mean": {
+                "point_estimate": 8.299592350746269,
+                "confidence_interval": { "lower_bound": 8.26, "upper_bound": 8.34 }
+            },
+            "slope": null
+        }"#;
+
+        let change = ChangeInfo::from_estimates(&parse(WARMED_UP), &parse(baseline));
+        let ratio = 1.0 + change.point_estimate;
+
+        // Both means, rather than this run's slope against that run's mean.
+        assert!((ratio - 1.560_668_572_8).abs() < 1e-9);
     }
 
     #[test]
-    fn computed_change_exactly_matches_criterion_point_estimate() {
-        // Captured from the example benchmark after running Criterion with
-        // `--save-baseline main`, followed by `--baseline main`.
-        let current: Estimates = serde_json::from_str(
-            r#"{
-                "mean": { "point_estimate": 0.4963816178911267 },
-                "slope": null
-            }"#,
-        )
-        .expect("parse current Criterion estimates");
-        let baseline: Estimates = serde_json::from_str(
-            r#"{
-                "mean": { "point_estimate": 0.499565914117225 },
-                "slope": null
-            }"#,
-        )
-        .expect("parse baseline Criterion estimates");
-        let criterion_change: CriterionChangeEstimates = serde_json::from_str(
-            r#"{
-                "mean": { "point_estimate": -0.006374126288670401 }
-            }"#,
-        )
-        .expect("parse Criterion change estimates");
+    fn change_carries_the_ratio_bounds_of_both_intervals() {
+        let change = ChangeInfo::from_estimates(&parse(WARMED_UP), &parse(STEADY));
 
-        let computed = ChangeInfo::from_estimates(&current, &baseline);
-
-        assert_eq!(
-            computed.point_estimate,
-            criterion_change.mean.point_estimate
-        );
+        assert!((change.lower_ratio - 7.360335814242837 / 8.375).abs() < 1e-9);
+        assert!((change.upper_ratio - 8.182146986705531 / 8.291666666666666).abs() < 1e-9);
     }
 }
