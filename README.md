@@ -14,20 +14,22 @@
 Use `Renderer` to select datasets, filter benchmarks, and configure the output:
 
 ```rust
-use criterion_markdown::{ChangeThresholds, Renderer};
+use criterion_markdown::{Emojis, Renderer, Thresholds};
 
 fn main() -> anyhow::Result<()> {
-        let thresholds = ChangeThresholds::default()
+        let thresholds = Thresholds::default()
                 .improvement_ratio(1.1)
                 .strong_improvement_ratio(1.5)
                 .regression_ratio(0.95);
+        let emojis = Emojis::default().strong_improvement("🔥");
         let markdown = Renderer::new("target/criterion")
                 .candidate("new")
                 .baseline_root("artifacts/criterion")
                 .baseline("main")
                 .benchmark("group/benchmark/1")
                 .benchmarks(["group/benchmark/2", "group/benchmark/3"])
-                .change_thresholds(thresholds)
+                .thresholds(thresholds)
+                .emojis(emojis)
                 .summary_limit(5)
                 .title("Benchmark Results")
                 .collapsible(true)
@@ -51,12 +53,12 @@ Change thresholds use the ratio `baseline time / candidate time`. The defaults c
 
 Invalid or incorrectly ordered threshold configurations return an error from `render`.
 
+Use `Emojis` with `Renderer::emojis` to customize the regression, stable,
+improvement, and strong improvement indicators. The defaults are `❌`, `➖`,
+`↗️`, and `🚀`, respectively. Custom indicators are used consistently in the
+benchmark tables, summary lists, and collapsible summary headline.
+
 `baseline_root` can point to a separate Criterion output tree, such as a downloaded CI artifact. It is also where the renderer looks for the default `base` dataset when no baseline is specified. For each candidate benchmark, the renderer reads the baseline from the same relative benchmark path beneath that root.
-
-The existing free functions remain available as convenience entrypoints:
-
-- `criterion_markdown::render(criterion_dir, allowlist)` renders the `new` candidate and compares it with `base` when available.
-- `criterion_markdown::render_with_options(criterion_dir, allowlist, &options)` additionally configures an optional baseline, title, and collapsible output through `RenderOptions`.
 
 The change point estimate is computed with the same formula Criterion uses:
 `candidate_mean / baseline_mean - 1`. Selecting the same candidate and baseline Criterion used for a run therefore produces the same point estimate as its `change/estimates.json` output. If the selected baseline is absent for every benchmark, the report omits comparison information. If the baseline exists for only some benchmarks, entries without it render `---` for their change.

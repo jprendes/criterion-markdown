@@ -4,19 +4,21 @@
 //! # Example
 //!
 //! ```rust,no_run
-//! use criterion_markdown::{ChangeThresholds, Renderer};
+//! use criterion_markdown::{Emojis, Renderer, Thresholds};
 //!
 //! fn main() -> anyhow::Result<()> {
-//!     let thresholds = ChangeThresholds::default()
+//!     let thresholds = Thresholds::default()
 //!         .improvement_ratio(1.1)
 //!         .strong_improvement_ratio(1.5)
 //!         .regression_ratio(0.95);
+//!     let emojis = Emojis::default().strong_improvement("🔥");
 //!     let markdown = Renderer::new("target/criterion")
 //!         .candidate("new")
 //!         .baseline_root("artifacts/criterion")
 //!         .baseline("main")
 //!         .benchmarks(["group/benchmark/1", "group/benchmark/2"])
-//!         .change_thresholds(thresholds)
+//!         .thresholds(thresholds)
+//!         .emojis(emojis)
 //!         .summary_limit(5)
 //!         .title("Benchmark Results")
 //!         .collapsible(true)
@@ -39,13 +41,13 @@ mod model;
 /// Ratios are calculated as `baseline time / candidate time` and classified as
 /// regression, neutral, improvement, or strong improvement.
 #[derive(Debug, Clone, Copy)]
-pub struct ChangeThresholds {
+pub struct Thresholds {
     improvement_ratio: f64,
     strong_improvement_ratio: f64,
     regression_ratio: f64,
 }
 
-impl ChangeThresholds {
+impl Thresholds {
     /// Sets the minimum ratio rendered as an improvement. Defaults to `1.1`.
     pub fn improvement_ratio(mut self, ratio: f64) -> Self {
         self.improvement_ratio = ratio;
@@ -85,7 +87,7 @@ impl ChangeThresholds {
     }
 }
 
-impl Default for ChangeThresholds {
+impl Default for Thresholds {
     fn default() -> Self {
         Self {
             improvement_ratio: 1.1,
@@ -95,25 +97,48 @@ impl Default for ChangeThresholds {
     }
 }
 
-/// Options for controlling the rendered markdown output.
-#[derive(Debug, Clone)]
-pub struct RenderOptions {
-    /// The report title. Defaults to `Benchmarks`.
-    pub title: String,
-    /// Whether to wrap the output in a `<details>` element.
-    pub collapsible: bool,
-    /// The Criterion baseline directory to compare against.
-    ///
-    /// When unset, the renderer looks for Criterion's default `base` dataset.
-    pub baseline: Option<String>,
+/// Emojis used to represent benchmark change classifications.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Emojis {
+    pub(crate) regression: String,
+    pub(crate) stable: String,
+    pub(crate) improvement: String,
+    pub(crate) strong_improvement: String,
 }
 
-impl Default for RenderOptions {
+impl Emojis {
+    /// Sets the emoji rendered for regressions. Defaults to `❌`.
+    pub fn regression(mut self, emoji: impl AsRef<str>) -> Self {
+        self.regression = emoji.as_ref().to_string();
+        self
+    }
+
+    /// Sets the emoji rendered for stable results. Defaults to `➖`.
+    pub fn stable(mut self, emoji: impl AsRef<str>) -> Self {
+        self.stable = emoji.as_ref().to_string();
+        self
+    }
+
+    /// Sets the emoji rendered for improvements. Defaults to `↗️`.
+    pub fn improvement(mut self, emoji: impl AsRef<str>) -> Self {
+        self.improvement = emoji.as_ref().to_string();
+        self
+    }
+
+    /// Sets the emoji rendered for strong improvements. Defaults to `🚀`.
+    pub fn strong_improvement(mut self, emoji: impl AsRef<str>) -> Self {
+        self.strong_improvement = emoji.as_ref().to_string();
+        self
+    }
+}
+
+impl Default for Emojis {
     fn default() -> Self {
         Self {
-            title: "Benchmarks".to_string(),
-            collapsible: false,
-            baseline: None,
+            regression: "❌".to_string(),
+            stable: "➖".to_string(),
+            improvement: "↗️".to_string(),
+            strong_improvement: "🚀".to_string(),
         }
     }
 }
@@ -128,7 +153,8 @@ pub struct Renderer {
     included_entries: Vec<String>,
     title: String,
     collapsible: bool,
-    change_thresholds: ChangeThresholds,
+    thresholds: Thresholds,
+    emojis: Emojis,
     summary_limit: usize,
 }
 
@@ -144,7 +170,8 @@ impl Renderer {
             included_entries: Vec::new(),
             title: "Benchmarks".to_string(),
             collapsible: false,
-            change_thresholds: ChangeThresholds::default(),
+            thresholds: Thresholds::default(),
+            emojis: Emojis::default(),
             summary_limit: 3,
         }
     }
@@ -204,8 +231,14 @@ impl Renderer {
     }
 
     /// Configures the ratios used to select change indicators.
-    pub fn change_thresholds(mut self, thresholds: ChangeThresholds) -> Self {
-        self.change_thresholds = thresholds;
+    pub fn thresholds(mut self, thresholds: Thresholds) -> Self {
+        self.thresholds = thresholds;
+        self
+    }
+
+    /// Configures the emojis used for benchmark change classifications.
+    pub fn emojis(mut self, emojis: Emojis) -> Self {
+        self.emojis = emojis;
         self
     }
 
@@ -218,7 +251,7 @@ impl Renderer {
 
     /// Loads the configured results and renders them as markdown.
     pub fn render(&self) -> Result<String> {
-        self.change_thresholds.validate()?;
+        self.thresholds.validate()?;
         let mut entries = discovery::discover_benchmarks(
             &self.criterion_dir,
             &self.candidate,
@@ -235,19 +268,20 @@ impl Renderer {
             );
         }
         let summary =
-            markdown::compute_summary(&entries, self.change_thresholds, self.summary_limit);
+            markdown::compute_summary(&entries, self.thresholds, &self.emojis, self.summary_limit);
         let body = markdown::format_table(
             &entries,
             &self.title,
             self.collapsible,
-            self.change_thresholds,
+            self.thresholds,
+            &self.emojis,
             &summary,
         );
         if !self.collapsible {
             return Ok(body);
         }
         let headline = summary
-            .headline()
+            .headline(&self.emojis)
             .map(|headline| format!(" ({headline})"))
             .unwrap_or_default();
         Ok(format!(
@@ -255,33 +289,4 @@ impl Renderer {
             self.title
         ))
     }
-}
-
-/// Reads all benchmark results from the given criterion output directory
-/// and renders a markdown table.
-///
-/// `allowlist` filters benchmarks by `full_id`.
-///
-/// If the iterator is empty, no filtering is applied.
-pub fn render(
-    criterion_dir: impl AsRef<Path>,
-    allowlist: impl IntoIterator<Item = impl AsRef<str>>,
-) -> Result<String> {
-    Renderer::new(criterion_dir).benchmarks(allowlist).render()
-}
-
-/// Like [`render`], but accepts additional [`RenderOptions`] to control output.
-pub fn render_with_options(
-    criterion_dir: impl AsRef<Path>,
-    allowlist: impl IntoIterator<Item = impl AsRef<str>>,
-    options: &RenderOptions,
-) -> Result<String> {
-    let mut renderer = Renderer::new(criterion_dir)
-        .benchmarks(allowlist)
-        .title(&options.title)
-        .collapsible(options.collapsible);
-    if let Some(baseline) = &options.baseline {
-        renderer = renderer.baseline(baseline);
-    }
-    renderer.render()
 }

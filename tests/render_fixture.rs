@@ -72,7 +72,8 @@ fn renderer_uses_default_baseline_when_available() {
         change: Some(-0.5),
     });
 
-    let output = criterion_markdown::render(&dir, std::iter::empty::<&str>())
+    let output = criterion_markdown::Renderer::new(&dir)
+        .render()
         .expect("render should succeed");
 
     assert!(output.contains("`12.00 µs`"));
@@ -93,7 +94,8 @@ fn omits_comparisons_when_baseline_is_missing() {
         change: None,
     });
 
-    let output = criterion_markdown::render(&dir, std::iter::empty::<&str>())
+    let output = criterion_markdown::Renderer::new(&dir)
+        .render()
         .expect("render should succeed");
 
     assert!(output.contains("### missing_change_group"));
@@ -187,12 +189,16 @@ fn applies_allowlist_filter() {
     });
 
     let selected = vec!["example_group/sum/1000".to_string()];
-    let output =
-        criterion_markdown::render(&dir, &selected).expect("allowlisted render should succeed");
+    let output = criterion_markdown::Renderer::new(&dir)
+        .benchmarks(&selected)
+        .render()
+        .expect("allowlisted render should succeed");
     assert!(output.contains("### example_group"));
 
     let excluded = vec!["not-a-real-benchmark".to_string()];
-    let err = criterion_markdown::render(&dir, &excluded)
+    let err = criterion_markdown::Renderer::new(&dir)
+        .benchmarks(&excluded)
+        .render()
         .expect_err("render should fail when no entries match allowlist");
     assert!(err.to_string().contains("No benchmark results found"));
 }
@@ -210,7 +216,8 @@ fn renders_special_characters_in_labels() {
         change: Some(-0.05),
     });
 
-    let output = criterion_markdown::render(&dir, std::iter::empty::<&str>())
+    let output = criterion_markdown::Renderer::new(&dir)
+        .render()
         .expect("render should succeed");
 
     assert!(output.contains("### special_group"));
@@ -254,14 +261,12 @@ fn wraps_in_details_summary_when_option_set() {
         change: Some(-0.5),
     });
 
-    let options = criterion_markdown::RenderOptions {
-        title: "Benchmark Results".to_string(),
-        collapsible: true,
-        baseline: Some("base".to_string()),
-    };
-    let output =
-        criterion_markdown::render_with_options(&dir, std::iter::empty::<&str>(), &options)
-            .expect("render should succeed");
+    let output = criterion_markdown::Renderer::new(&dir)
+        .title("Benchmark Results")
+        .collapsible(true)
+        .baseline("base")
+        .render()
+        .expect("render should succeed");
 
     assert!(output.starts_with("<details>\n<summary>Benchmark Results (🚀 2.00x)</summary>"));
     assert!(output.contains("</summary>"));
@@ -459,13 +464,10 @@ fn computes_change_from_selected_baseline() {
     )
     .expect("write change fixture");
 
-    let options = criterion_markdown::RenderOptions {
-        baseline: Some("previous".to_string()),
-        ..Default::default()
-    };
-    let output =
-        criterion_markdown::render_with_options(&dir, std::iter::empty::<&str>(), &options)
-            .expect("render should succeed");
+    let output = criterion_markdown::Renderer::new(&dir)
+        .baseline("previous")
+        .render()
+        .expect("render should succeed");
 
     assert!(output.contains("🚀 **2.00x faster**"));
     assert!(!output.contains("1.50x slower"));
@@ -587,7 +589,7 @@ fn renderer_finds_default_baseline_in_separate_root() {
 }
 
 #[test]
-fn renderer_uses_custom_change_thresholds() {
+fn renderer_uses_custom_thresholds() {
     let base = unique_temp_fixture_dir("change-thresholds");
 
     for (full_id, function_id, change) in [
@@ -609,13 +611,13 @@ fn renderer_uses_custom_change_thresholds() {
         );
     }
 
-    let thresholds = criterion_markdown::ChangeThresholds::default()
+    let thresholds = criterion_markdown::Thresholds::default()
         .improvement_ratio(1.1)
         .strong_improvement_ratio(1.5)
         .regression_ratio(0.96);
     let output = criterion_markdown::Renderer::new(&base)
         .baseline("base")
-        .change_thresholds(thresholds)
+        .thresholds(thresholds)
         .render()
         .expect("render with custom thresholds should succeed");
 
@@ -624,7 +626,55 @@ fn renderer_uses_custom_change_thresholds() {
 }
 
 #[test]
-fn renderer_rejects_invalid_change_thresholds() {
+fn renderer_uses_custom_emojis_for_all_change_classifications() {
+    let base = unique_temp_fixture_dir("custom-emojis");
+
+    for (full_id, function_id, change) in [
+        ("emoji_group/regression/1", "regression/1", 0.25),
+        ("emoji_group/stable/2", "stable/2", 0.0),
+        ("emoji_group/improvement/3", "improvement/3", -0.2),
+        (
+            "emoji_group/strong_improvement/4",
+            "strong_improvement/4",
+            -0.5,
+        ),
+    ] {
+        write_fixture_to(
+            &base,
+            FixtureSpec {
+                test_name: "",
+                group_id: "emoji_group",
+                function_id,
+                value_str: None,
+                full_id,
+                slope_ns: 100.0,
+                mean_ns: 100.0,
+                change: Some(change),
+            },
+        );
+    }
+
+    let emojis = criterion_markdown::Emojis::default()
+        .regression("🔴")
+        .stable("⚪")
+        .improvement("🟢")
+        .strong_improvement("🔥");
+    let output = criterion_markdown::Renderer::new(&base)
+        .baseline("base")
+        .emojis(emojis)
+        .collapsible(true)
+        .render()
+        .expect("render with custom emojis should succeed");
+
+    assert!(output.contains("🔴 *1.25x slower*"));
+    assert!(output.contains("⚪ **1.00x**"));
+    assert!(output.contains("🟢 **1.25x faster**"));
+    assert!(output.contains("🔥 **2.00x faster**"));
+    assert!(output.contains("<summary>Benchmarks (🔴 1.25x | 🔥 2.00x)</summary>"));
+}
+
+#[test]
+fn renderer_rejects_invalid_thresholds() {
     let dir = write_fixture(FixtureSpec {
         test_name: "invalid-thresholds",
         group_id: "threshold_group",
@@ -636,25 +686,24 @@ fn renderer_rejects_invalid_change_thresholds() {
         change: None,
     });
 
-    let invalid_improvement =
-        criterion_markdown::ChangeThresholds::default().improvement_ratio(0.9);
+    let invalid_improvement = criterion_markdown::Thresholds::default().improvement_ratio(0.9);
     let error = criterion_markdown::Renderer::new(&dir)
-        .change_thresholds(invalid_improvement)
+        .thresholds(invalid_improvement)
         .render()
         .expect_err("invalid improvement ratio should fail");
     assert!(error.to_string().contains("improvement ratio"));
 
-    let invalid_regression = criterion_markdown::ChangeThresholds::default().regression_ratio(1.1);
+    let invalid_regression = criterion_markdown::Thresholds::default().regression_ratio(1.1);
     let error = criterion_markdown::Renderer::new(&dir)
-        .change_thresholds(invalid_regression)
+        .thresholds(invalid_regression)
         .render()
         .expect_err("invalid regression ratio should fail");
     assert!(error.to_string().contains("regression ratio"));
 
     let invalid_strong_improvement =
-        criterion_markdown::ChangeThresholds::default().strong_improvement_ratio(1.05);
+        criterion_markdown::Thresholds::default().strong_improvement_ratio(1.05);
     let error = criterion_markdown::Renderer::new(&dir)
-        .change_thresholds(invalid_strong_improvement)
+        .thresholds(invalid_strong_improvement)
         .render()
         .expect_err("invalid strong improvement ratio should fail");
     assert!(error.to_string().contains("strong improvement ratio"));

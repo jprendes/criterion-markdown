@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write;
 
 use crate::model::{BenchEntry, ChangeInfo};
-use crate::ChangeThresholds;
+use crate::{Emojis, Thresholds};
 
 /// Formats all benchmark entries into a markdown string.
 ///
@@ -12,7 +12,8 @@ pub(crate) fn format_table(
     entries: &[BenchEntry],
     title: &str,
     skip_title: bool,
-    thresholds: ChangeThresholds,
+    thresholds: Thresholds,
+    emojis: &Emojis,
     summary: &SummaryInfo,
 ) -> String {
     // Group entries by group_id, preserving discovery order
@@ -33,7 +34,13 @@ pub(crate) fn format_table(
 
     for (group_id, group_entries) in &groups {
         writeln!(out, "### {group_id}\n").unwrap();
-        write_group_table(&mut out, group_entries, thresholds, show_comparisons);
+        write_group_table(
+            &mut out,
+            group_entries,
+            thresholds,
+            emojis,
+            show_comparisons,
+        );
         writeln!(out).unwrap();
     }
 
@@ -44,7 +51,8 @@ pub(crate) fn format_table(
 fn write_group_table(
     out: &mut String,
     entries: &[&BenchEntry],
-    thresholds: ChangeThresholds,
+    thresholds: Thresholds,
+    emojis: &Emojis,
     show_comparisons: bool,
 ) {
     // Collect unique functions (columns) and values (rows), preserving order
@@ -96,7 +104,7 @@ fn write_group_table(
             if let Some(&entry) = lookup.get(&(*func, *val)) {
                 let time_str = format_time(entry.estimate_ns);
                 if show_comparisons {
-                    let change_str = format_change(&entry.change, thresholds);
+                    let change_str = format_change(&entry.change, thresholds, emojis);
                     write!(out, " | `{time_str}` ({change_str}) ").unwrap();
                 } else {
                     write!(out, " | `{time_str}` ").unwrap();
@@ -113,7 +121,7 @@ fn write_group_table(
 ///
 /// Uses `compare = baseline / candidate` and the configured thresholds to
 /// determine the indicator tier.
-fn format_change(change: &Option<ChangeInfo>, thresholds: ChangeThresholds) -> String {
+fn format_change(change: &Option<ChangeInfo>, thresholds: Thresholds, emojis: &Emojis) -> String {
     let Some(change) = change else {
         return "---".to_string();
     };
@@ -132,22 +140,24 @@ fn format_change(change: &Option<ChangeInfo>, thresholds: ChangeThresholds) -> S
     };
 
     match kind {
-        ChangeKind::StrongImprovement => format!("🚀 **{speedup_str}**"),
-        ChangeKind::Improvement => format!("↗️ **{speedup_str}**"),
-        ChangeKind::Neutral => format!("➖ **{speedup_str}**"),
-        ChangeKind::Regression => format!("❌ *{speedup_str}*"),
+        ChangeKind::StrongImprovement => {
+            format!("{} **{speedup_str}**", emojis.strong_improvement)
+        }
+        ChangeKind::Improvement => format!("{} **{speedup_str}**", emojis.improvement),
+        ChangeKind::Neutral => format!("{} **{speedup_str}**", emojis.stable),
+        ChangeKind::Regression => format!("{} *{speedup_str}*", emojis.regression),
     }
 }
 
-fn format_compact_change(change: &ChangeInfo, thresholds: ChangeThresholds) -> String {
+fn format_compact_change(change: &ChangeInfo, thresholds: Thresholds, emojis: &Emojis) -> String {
     let ChangeClassification::Valid { ratio, kind } = classify_change(change, thresholds) else {
         return "⚠ n/a".to_string();
     };
     let icon = match kind {
-        ChangeKind::StrongImprovement => "🚀",
-        ChangeKind::Improvement => "↗️",
-        ChangeKind::Neutral => "➖",
-        ChangeKind::Regression => "❌",
+        ChangeKind::StrongImprovement => &emojis.strong_improvement,
+        ChangeKind::Improvement => &emojis.improvement,
+        ChangeKind::Neutral => &emojis.stable,
+        ChangeKind::Regression => &emojis.regression,
     };
     let magnitude = if ratio < 1.0 { 1.0 / ratio } else { ratio };
     format!("{icon} {magnitude:.2}x")
@@ -166,7 +176,7 @@ enum ChangeClassification {
     Invalid,
 }
 
-fn classify_change(change: &ChangeInfo, thresholds: ChangeThresholds) -> ChangeClassification {
+fn classify_change(change: &ChangeInfo, thresholds: Thresholds) -> ChangeClassification {
     let ratio = 1.0 + change.point_estimate;
     if !ratio.is_finite() || ratio <= 0.0 {
         return ChangeClassification::Invalid;
@@ -223,7 +233,7 @@ pub(crate) struct SummaryInfo {
 }
 
 impl SummaryInfo {
-    pub(crate) fn headline(&self) -> Option<String> {
+    pub(crate) fn headline(&self, emojis: &Emojis) -> Option<String> {
         if !self.enabled {
             return None;
         }
@@ -234,7 +244,7 @@ impl SummaryInfo {
             )),
             (Some(regression), None) => Some(regression.headline_change.clone()),
             (None, Some(gain)) => Some(gain.headline_change.clone()),
-            (None, None) if self.compared_count > 0 => Some("➖ stable".to_string()),
+            (None, None) if self.compared_count > 0 => Some(format!("{} stable", emojis.stable)),
             (None, None) => None,
         }
     }
@@ -243,7 +253,8 @@ impl SummaryInfo {
 /// Computes the top improvements and regressions across all entries.
 pub(crate) fn compute_summary(
     entries: &[BenchEntry],
-    thresholds: ChangeThresholds,
+    thresholds: Thresholds,
+    emojis: &Emojis,
     limit: usize,
 ) -> SummaryInfo {
     let compared_count = entries
@@ -305,8 +316,8 @@ pub(crate) fn compute_summary(
 
     let to_summary_entry = |entry: &BenchEntry| SummaryEntry {
         id: entry.full_id.clone(),
-        change: format_change(&entry.change, thresholds),
-        headline_change: format_compact_change(entry.change.as_ref().unwrap(), thresholds),
+        change: format_change(&entry.change, thresholds, emojis),
+        headline_change: format_compact_change(entry.change.as_ref().unwrap(), thresholds, emojis),
     };
 
     SummaryInfo {
@@ -360,7 +371,7 @@ fn write_summary(out: &mut String, info: &SummaryInfo) {
 mod tests {
     use super::{format_compact_change, SummaryEntry, SummaryInfo};
     use crate::model::ChangeInfo;
-    use crate::ChangeThresholds;
+    use crate::{Emojis, Thresholds};
 
     #[test]
     fn compact_change_preserves_modest_improvement_icon() {
@@ -371,7 +382,7 @@ mod tests {
         };
 
         assert_eq!(
-            format_compact_change(&change, ChangeThresholds::default()),
+            format_compact_change(&change, Thresholds::default(), &Emojis::default()),
             "↗️ 1.20x"
         );
     }
@@ -390,10 +401,17 @@ mod tests {
             lower_ratio: 0.8,
             upper_ratio: 3.2,
         };
-        let thresholds = ChangeThresholds::default();
+        let thresholds = Thresholds::default();
 
-        assert_eq!(format_compact_change(&decided, thresholds), "❌ 2.00x");
-        assert_eq!(format_compact_change(&undecided, thresholds), "➖ 2.00x");
+        let emojis = Emojis::default();
+        assert_eq!(
+            format_compact_change(&decided, thresholds, &emojis),
+            "❌ 2.00x"
+        );
+        assert_eq!(
+            format_compact_change(&undecided, thresholds, &emojis),
+            "➖ 2.00x"
+        );
     }
 
     #[test]
@@ -413,7 +431,10 @@ mod tests {
             enabled: true,
         };
 
-        assert_eq!(summary.headline().as_deref(), Some("❌ 1.20x | 🚀 2.00x"));
+        assert_eq!(
+            summary.headline(&Emojis::default()).as_deref(),
+            Some("❌ 1.20x | 🚀 2.00x")
+        );
     }
 
     #[test]
@@ -425,6 +446,9 @@ mod tests {
             enabled: true,
         };
 
-        assert_eq!(summary.headline().as_deref(), Some("➖ stable"));
+        assert_eq!(
+            summary.headline(&Emojis::default().stable("⚪")).as_deref(),
+            Some("⚪ stable")
+        );
     }
 }

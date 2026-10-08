@@ -10,9 +10,9 @@ fn renders_markdown_from_real_criterion_output() {
 
     assert!(status.success(), "cargo bench did not finish successfully");
 
-    let output =
-        criterion_markdown::render(Path::new("target/criterion"), std::iter::empty::<&str>())
-            .expect("render should succeed on real criterion output");
+    let output = criterion_markdown::Renderer::new(Path::new("target/criterion"))
+        .render()
+        .expect("render should succeed on real criterion output");
 
     assert!(output.contains("### example_group"));
     assert!(output.contains("`sum`"));
